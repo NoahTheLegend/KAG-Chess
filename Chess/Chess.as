@@ -27,8 +27,6 @@
 	ap1.SetKeysToTake(key_left | key_right | key_up | key_down | key_action1 | key_action2);
 
 	if (isServer()) ResetGameLog(this);
-
-	this.Tag("building");
 }
 
 void RequestSync(CBlob@ this)
@@ -1144,7 +1142,7 @@ void ResetBoard(CBlob@ this)
 
 bool canBePickedUp(CBlob@ this, CBlob@ byBlob)
 {
-	return false;
+	return true;
 }
 
 bool canBePutInInventory(CBlob@ this, CBlob@ inventoryBlob)
