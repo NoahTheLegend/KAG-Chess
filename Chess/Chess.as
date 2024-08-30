@@ -150,7 +150,7 @@ void onTick(CBlob@ this)
 					}
 					if (isClient())
 					{
-						this.getSprite().PlaySound("board_select.ogg", 0.25f, 1.1f);
+						this.getSprite().PlaySound("board_select.ogg", 0.25f, 1.1f+getRandomPitch());
 					}
 				}
 			}
@@ -158,7 +158,7 @@ void onTick(CBlob@ this)
 			{
 				if (isClient() && cw != -1)
 				{
-					this.getSprite().PlaySound("board_fail_select.ogg", 0.25f, 1.0f);
+					this.getSprite().PlaySound("board_fail_select.ogg", 0.25f, 1.0f+getRandomPitch());
 				}
 				if (isServer())
 				{
@@ -231,7 +231,7 @@ void onTick(CBlob@ this)
 					}
 					if (isClient())
 					{
-						this.getSprite().PlaySound("board_select.ogg", 0.25f, 1.1f);
+						this.getSprite().PlaySound("board_select.ogg", 0.25f, 1.1f+getRandomPitch());
 					}
 				}
 			}
@@ -239,7 +239,7 @@ void onTick(CBlob@ this)
 			{
 				if (isClient() && cb != -1)
 				{
-					this.getSprite().PlaySound("board_fail_select.ogg", 0.25f, 1.0f);
+					this.getSprite().PlaySound("board_fail_select.ogg", 0.25f, 1.0f+getRandomPitch());
 				}
 				if (isServer())
 				{
@@ -340,20 +340,23 @@ void onRender(CSprite@ sprite)
 		if (this.get("chess_player", @chess_player) && this.get("game_from", game_from) && this.get("game_to", game_to))
 		{
 			s8 s = Maths::Min(chess_player.size(), 8);
+			s8 start_index = Maths::Max(0, chess_player.size() - 8); 
+
 			for (s8 i = 0; i < s; i++)
 			{
-				f32 row_offset = (area/8)*(s-i);
+			    s8 actual_index = start_index + i;
+			    f32 row_offset = (area / 8) * (s - i);
 
-				s8 from_x = game_from[i]%8;
-				s8 from_y = 8 - Maths::Floor(game_from[i]/8);
+			    s8 from_x = game_from[actual_index] % 8;
+			    s8 from_y = 8 - Maths::Floor(game_from[actual_index] / 8);
 
-				s8 to_x = game_to[i]%8;
-				s8 to_y = 8 - Maths::Floor(game_to[i]/8);
+			    s8 to_x = game_to[actual_index] % 8;
+			    s8 to_y = 8 - Maths::Floor(game_to[actual_index] / 8);
 
-				string[] spl = chess_player[i].split("_");
-				string text = (spl[0] == "-1" ? "Rules" : spl[0] == "0" ? "White" : "Black ")+": "+cols[from_x]+""+from_y+" - "+cols[to_x]+""+to_y;
+			    string[] spl = chess_player[actual_index].split("_");
+			    string text = (spl[0] == "-1" ? "Rules" : spl[0] == "0" ? "White" : "Black") + ": " + cols[from_x] + "" + from_y + " - " + cols[to_x] + "" + to_y;
 
-				GUI::DrawText(text, tl+Vec2f(area+16, row_offset - (area/8)/2) - 1.5f, SColor(225,255,255,255));
+			    GUI::DrawText(text, tl + Vec2f(area + 16, row_offset - (area / 8)) + 1.5f, SColor(225, 255, 255, 255));
 			}
 		}
 
@@ -828,9 +831,9 @@ class Board // breaks solid, but who cares
 		if (isClient() && blob !is null)
 		{
 			if (on_dest !is null && on_dest.type != 0)
-				blob.getSprite().PlaySound("board_cap.ogg", 0.33f, 1.0f);
+				blob.getSprite().PlaySound("board_cap.ogg", 0.33f, 1.0f+getRandomPitch());
 			else
-				blob.getSprite().PlaySound("board_move.ogg", 0.33f, 1.0f);
+				blob.getSprite().PlaySound("board_move.ogg", 0.33f, 1.0f+getRandomPitch());
 		}
 
 		@board_pieces[dest_x][dest_y] = @on_pos;
@@ -1328,4 +1331,9 @@ void onDetach(CBlob@ this, CBlob@ detached, AttachmentPoint@ attachedPoint)
 {
 	this.getShape().getConsts().mapCollisions = true;
 	this.setAngleDegrees(0);
+}
+
+f32 getRandomPitch()
+{
+	return (XORRandom(6)-5)*0.01f;
 }
