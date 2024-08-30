@@ -2,6 +2,14 @@
 // ====================================
 // render_icon interpolation does not work due to Sync: board on client is fully rebuilt when synced
 // ^ find out a hack or save signatures of all pieces in a board instead of creating new ones (kinda easy to ruin in AS)
+// ------------------------------------
+// when attached to player and chess blob is partially inside map, the rendered board microshakes until ended
+// collision with map at least once
+// ------------------------------------
+
+// README
+// secondary seat (black) has fixed facepos of attachment point, after including this file in a mod, you should
+// perform changes to Seats.as using "seat turn around" tag to avoid hard setting occupied facepos
 
 void onInit(CBlob@ this)
 {
@@ -12,6 +20,8 @@ void onInit(CBlob@ this)
     RequestSync(this);
 
 	this.Tag("builder always hit");
+	this.Tag("heavy weight");
+	this.Tag("seat turn around");
 	
 	this.set_u8("selected_white", 64 - 4);
 	this.set_u8("selected_black", 4);
@@ -34,153 +44,6 @@ void onInit(CBlob@ this)
 	ResetGameLog(this);
 }
 
-void RequestSync(CBlob@ this)
-{
-	if (!isClient()) return;
-	
-	CPlayer@ local = getLocalPlayer();
-	if (local is null) return;
-
-	CBitStream params;
-	params.write_bool(true);
-	params.write_u16(local.getNetworkID());
-	this.SendCommand(this.getCommandID("sync"), params);
-}
-
-void Sync(CBlob@ this, u16 pid = 0)
-{
-	if (!isServer()) return;
-	
-	CPlayer@ p = pid == 0 ? null : getPlayerByNetworkId(pid);
-
-	Table@ table;
-	if (!this.get("Table", @table)) return;
-
-	CBitStream params1;
-	params1.write_bool(false);
-	params1.write_u16(0);
-	params1.write_u8(this.get_u8("selected_white"));
-	params1.write_u8(this.get_u8("selected_black"));
-	params1.write_s8(this.get_s8("captured_white"));
-	params1.write_s8(this.get_s8("captured_black"));
-	params1.write_bool(table.can_castle_white);
-	params1.write_bool(table.can_castle_black);
-	params1.write_u8(table.castling_rook_moved_white);
-	params1.write_u8(table.castling_rook_moved_black);
-	params1.write_bool(this.get_bool("reset_white"));
-	params1.write_bool(this.get_bool("reset_black"));
-	params1.write_bool(table.turn_white);
-	params1.write_bool(table.end);
-
-	for (u8 i = 0; i < 64; i++)
-	{
-		s8 x = i%8;
-		s8 y = Maths::Floor(i/8);
-
-		u8 type = 0;
-		s8 color = -1;
-
-		Board@ p = @table.board_pieces[x][y];
-		if (p !is null)
-		{
-			type = p.type;
-			color = p.color;
-		}
-
-		params1.write_u8(type);
-		params1.write_u8(color);
-	}
-
-	if (pid != 0 && p !is null) // sync to caster
-		this.server_SendCommandToPlayer(this.getCommandID("sync"), params1, p);
-	else // sync to all
-		this.SendCommand(this.getCommandID("sync"), params1);
-}
-
-void onCommand(CBlob@ this, u8 cmd, CBitStream@ params)
-{
-	if (cmd == this.getCommandID("sync"))
-	{
-		//
-		bool init = params.read_bool();
-		u16 send_to = params.read_u16();
-		
-		if (isServer() && init)
-		{
-			Sync(this, send_to);
-		}
-		if (isClient() && !init)
-		{
-			Table@ table;
-			if (!this.get("Table", @table)) return;
-
-			//
-			u8 selected_white = params.read_u8();
-			u8 selected_black = params.read_u8();
-			s8 captured_white = params.read_s8();
-			s8 captured_black = params.read_s8();
-
-			this.set_u8("selected_white", selected_white);
-			this.set_u8("selected_black", selected_black);
-			this.set_s8("captured_white", captured_white);
-			this.set_s8("captured_black", captured_black);
-
-			//
-			bool can_castle_white = params.read_bool();
-			bool can_castle_black = params.read_bool();
-			u8 castling_rook_moved_white = params.read_u8();
-			u8 castling_rook_moved_black = params.read_u8();
-
-			table.can_castle_white = can_castle_white;
-			table.can_castle_black = can_castle_black;
-			table.castling_rook_moved_white = castling_rook_moved_white;
-			table.castling_rook_moved_black = castling_rook_moved_black;
-
-			//
-			bool reset_white = params.read_bool();
-			bool reset_black = params.read_bool();
-
-			this.set_bool("reset_white", reset_white);
-			this.set_bool("reset_black", reset_black);
-
-			table.turn_white = params.read_bool();
-			table.end = params.read_bool();
-
-			for (s8 i = 0; i < 64; i++)
-			{
-				s8 x = i%8;
-				s8 y = Maths::Floor(i/8);
-
-				u8 type = 0;
-				s8 color = -1;
-
-				if (!params.saferead_u8(type) || !params.saferead_s8(color))
-				{
-					error("Error while syncing board at ["+x+"]["+y+"]");
-				}
-
-				@table.board_pieces[x][y] = MakePieceOnBoard(table, type, color);
-			}
-
-			this.set("Table", @table);
-		}
-	}
-	else if (cmd == this.getCommandID("reset"))
-	{
-		if (!isServer()) return;
-		s8 side = -1;
-
-		if (!params.saferead_s8(side))
-		{
-			error("Could not read side of resetting board ["+this.getNetworkID()+"]");
-			return;
-		}
-
-		if (side == 0) this.set_bool("reset_white", true);
-		else if (side == 1) this.set_bool("reset_black", true);
-	}
-}
-
 void onTick(CBlob@ this)
 {
 	if (isServer() && this.get_bool("reset_white") && this.get_bool("reset_black"))
@@ -193,6 +56,11 @@ void onTick(CBlob@ this)
 
 		ResetBoard(this);
 		Sync(this);
+	}
+
+	if (this.isAttached())
+	{
+		this.setAngleDegrees(this.isFacingLeft() ? 90 : -90);
 	}
 
 	AttachmentPoint@ ap0 = this.getAttachments().getAttachmentPointByName("PLAYER0");
@@ -400,18 +268,10 @@ void onRender(CSprite@ sprite)
 	Driver@ driver = getDriver();
 	Vec2f thispos = this.getPosition();
 	Vec2f offset = Vec2f(0, -24.0f);
-	Vec2f oldpos2d = driver.getScreenPosFromWorldPos(this.getOldPosition() + offset);
-	Vec2f pos2d_raw = driver.getScreenPosFromWorldPos(thispos + offset);
-	Vec2f pos2d = Vec2f_lerp(oldpos2d, pos2d_raw, getInterpolationFactor());
+	Vec2f pos2d = driver.getScreenPosFromWorldPos(Vec2f_lerp(this.getOldPosition() + offset, thispos + offset, getInterpolationFactor()));
 	f32 area = tilesize * 8;
 
-	//if (!this.hasAttached()) return;
 	CBlob@ local = getLocalPlayerBlob();
-	if (local !is null && !local.isAttachedTo(this))
-	{
-		Vec2f mpos = driver.getWorldPosFromScreenPos(getControls().getInterpMouseScreenPos());
-		if ((mpos-thispos).Length() > this.getRadius()+4.0f) return;
-	}
 
 	AttachmentPoint@ ap0 = this.getAttachments().getAttachmentPointByName("PLAYER0");
 	AttachmentPoint@ ap1 = this.getAttachments().getAttachmentPointByName("PLAYER1");
@@ -427,145 +287,155 @@ void onRender(CSprite@ sprite)
 	Vec2f br = pos2d + Vec2f(area/2, 0);
 	f32 factor = tilesize/24.0f*0.5f;
 
-	Vec2f frameoffset = Vec2f(4,4);
-	GUI::DrawFramedPane(tl-frameoffset+Vec2f(0,frameoffset.y), tl+Vec2f(0,area)); // left
-	GUI::DrawFramedPane(tl-frameoffset-Vec2f(frameoffset.x, 0), tl+Vec2f(area+frameoffset.x*2, 0)); // top
-	GUI::DrawFramedPane(br-Vec2f(area+frameoffset.x*2, 0), br+frameoffset+Vec2f(frameoffset.x,0)); // bottom
-	GUI::DrawFramedPane(br-Vec2f(0, area), br+frameoffset-Vec2f(0,frameoffset.y)); // right
-
-	// rows
-	GUI::SetFont("menu");
-	for (u8 i = 0; i < 8; i++)
+	bool rendering = true;
+	if (local !is null && !local.isAttachedTo(this))
 	{
-		f32 row_offset = (area/8)*(i+1);
-		GUI::DrawTextCentered(""+(i+1), tl+Vec2f(-16, area - row_offset + (area/8)/2) - 1.5f, SColor(225,255,255,255));
+		Vec2f mpos = driver.getWorldPosFromScreenPos(getControls().getInterpMouseScreenPos());
+		if ((mpos-thispos).Length() > this.getRadius()+4.0f) rendering = false;
 	}
 
-	// cols
-	for (u8 i = 0; i < 8; i++)
+	if (rendering)
 	{
-		f32 col_offset = (area/8)*i;
-		GUI::DrawTextCentered(cols[i], tl+Vec2f(col_offset + (area/8)/2, area + 16) - 4.0f, SColor(225,255,255,255));
-	}
+		Vec2f frameoffset = Vec2f(4,4);
+		GUI::DrawFramedPane(tl-frameoffset+Vec2f(0,frameoffset.y), tl+Vec2f(0,area)); // left
+		GUI::DrawFramedPane(tl-frameoffset-Vec2f(frameoffset.x, 0), tl+Vec2f(area+frameoffset.x*2, 0)); // top
+		GUI::DrawFramedPane(br-Vec2f(area+frameoffset.x*2, 0), br+frameoffset+Vec2f(frameoffset.x,0)); // bottom
+		GUI::DrawFramedPane(br-Vec2f(0, area), br+frameoffset-Vec2f(0,frameoffset.y)); // right
 
-	// history
-	string[]@ chess_player;
-	u8[] game_from;
-	u8[] game_to;
-	if (this.get("chess_player", @chess_player) && this.get("game_from", game_from) && this.get("game_to", game_to))
-	{
-		for (u8 i = 0; i < Maths::Min(8, chess_player.size()); i++)
+		// rows
+		GUI::SetFont("menu");
+		for (u8 i = 0; i < 8; i++)
 		{
-			f32 row_offset = (area/8)*i;
-
-			s8 from_x = game_from[i]%8;
-			s8 from_y = 8 - Maths::Floor(game_from[i]/8);
-
-			s8 to_x = game_to[i]%8;
-			s8 to_y = 8 - Maths::Floor(game_to[i]/8);
-
-			string[] spl = chess_player[i].split("_");
-			string text = (spl[0] == "-1" ? "Rules" : spl[0] == "0" ? "White" : "Black ")+": "+cols[from_x]+""+from_y+" - "+cols[to_x]+""+to_y;
-			
-			GUI::DrawText(text, tl+Vec2f(area+16, row_offset + (area/8)/2) - 1.5f, SColor(225,255,255,255));
+			f32 row_offset = (area/8)*(i+1);
+			GUI::DrawTextCentered(""+(i+1), tl+Vec2f(-16, area - row_offset + (area/8)/2) - 1.5f, SColor(225,255,255,255));
 		}
-	}
 
-	if (u_showtutorial && (my_p0 || my_p1))
-	{
-		bool reset = my_p0 ? this.get_bool("reset_white") : this.get_bool("reset_black");
-		GUI::DrawTextCentered(reset ? "Waiting for opponent to reset the game..."
-			: "Press [END] key to reset the game\n     (Both players should press)", tl + Vec2f(area/2, area+128.0f), SColor(100,255,255,255));
-	
-		GUI::DrawTextCentered("WASD - movement, LMB - select / place, RMB - unselect", tl + Vec2f(area/2, area+152.0f), SColor(100,255,255,255));
-	}
-
-	bool draw_path = false;
-
-	u8 sw = this.get_u8("selected_white");
-	s8 cw = this.get_s8("captured_white");
-
-	u8 sb = this.get_u8("selected_black");
-	u8 cb = this.get_s8("captured_black");
-
-	// draw tiles
-	for (u8 i = 0; i < 64; i++)
-	{
-		u8 x = i%8;
-		u8 y = Maths::Floor(i/8);
-
-		SColor col = (y%2==0 ? i%2 : (i+1)%2) == 0 ? col_white : col_black;
-		Board@ p = @table.board_pieces[x][y];
-		bool not_empty = p !is null && p.type != 0;
-
-		if (my_p0)
+		// cols
+		for (u8 i = 0; i < 8; i++)
 		{
-			bool selected = x == sw%8 && y == Maths::Floor(sw/8);
-			bool captured = x == cw%8 && y == Maths::Floor(cw/8) && not_empty;
+			f32 col_offset = (area/8)*i;
+			GUI::DrawTextCentered(cols[i], tl+Vec2f(col_offset + (area/8)/2, area + 16) - 4.0f, SColor(225,255,255,255));
+		}
 
-			if (selected)
+		// history
+		string[]@ chess_player;
+		u8[] game_from;
+		u8[] game_to;
+		if (this.get("chess_player", @chess_player) && this.get("game_from", game_from) && this.get("game_to", game_to))
+		{
+			for (u8 i = chess_player.size(); i > Maths::Max(0, chess_player.size()); i--)
 			{
-				col = table.turn_white ? col_selection : col_selection_disabled;
-			}
-			if (captured)
-			{
-				col = col_captured;
-				draw_path = true;
+				f32 row_offset = (area/8)*i;
+
+				s8 from_x = game_from[i]%8;
+				s8 from_y = 8 - Maths::Floor(game_from[i]/8);
+
+				s8 to_x = game_to[i]%8;
+				s8 to_y = 8 - Maths::Floor(game_to[i]/8);
+
+				string[] spl = chess_player[i].split("_");
+				string text = (spl[0] == "-1" ? "Rules" : spl[0] == "0" ? "White" : "Black ")+": "+cols[from_x]+""+from_y+" - "+cols[to_x]+""+to_y;
+
+				GUI::DrawText(text, tl+Vec2f(area+16, row_offset) - 1.5f, SColor(225,255,255,255));
 			}
 		}
 
-		if (my_p1)
+		if (u_showtutorial && (my_p0 || my_p1))
 		{
-			bool selected = x == sb%8 && y == Maths::Floor(sb/8);
-			bool captured = x == cb%8 && y == Maths::Floor(cb/8) && not_empty;
+			bool reset = my_p0 ? this.get_bool("reset_white") : this.get_bool("reset_black");
+			GUI::DrawTextCentered(reset ? "Waiting for opponent to reset the game..."
+				: "Press [END] key to reset the game\n     (Both players should press)", tl + Vec2f(area/2, area+128.0f), SColor(100,255,255,255));
 
-			if (selected)
+			GUI::DrawTextCentered("WASD - movement, LMB - select / place, RMB - unselect", tl + Vec2f(area/2, area+152.0f), SColor(100,255,255,255));
+		}
+
+		bool draw_path = false;
+
+		u8 sw = this.get_u8("selected_white");
+		s8 cw = this.get_s8("captured_white");
+
+		u8 sb = this.get_u8("selected_black");
+		u8 cb = this.get_s8("captured_black");
+
+		// draw tiles
+		for (u8 i = 0; i < 64; i++)
+		{
+			u8 x = i%8;
+			u8 y = Maths::Floor(i/8);
+
+			SColor col = (y%2==0 ? i%2 : (i+1)%2) == 0 ? col_white : col_black;
+			Board@ p = @table.board_pieces[x][y];
+			bool not_empty = p !is null && p.type != 0;
+
+			if (my_p0)
 			{
-				col = !table.turn_white ? col_selection : col_selection_disabled;
+				bool selected = x == sw%8 && y == Maths::Floor(sw/8);
+				bool captured = x == cw%8 && y == Maths::Floor(cw/8) && not_empty;
+
+				if (selected)
+				{
+					col = table.turn_white ? col_selection : col_selection_disabled;
+				}
+				if (captured)
+				{
+					col = col_captured;
+					draw_path = true;
+				}
 			}
-			if (captured)
+
+			if (my_p1)
 			{
-				col = col_captured;
-				draw_path = true;
+				bool selected = x == sb%8 && y == Maths::Floor(sb/8);
+				bool captured = x == cb%8 && y == Maths::Floor(cb/8) && not_empty;
+
+				if (selected)
+				{
+					col = !table.turn_white ? col_selection : col_selection_disabled;
+				}
+				if (captured)
+				{
+					col = col_captured;
+					draw_path = true;
+				}
+			}
+
+			Vec2f tile_offset = Vec2f(f32(x) * tilesize, f32(y) * tilesize) + tl;
+			GUI::DrawRectangle(tile_offset, tile_offset + Vec2f(tilesize, tilesize), col);
+		}
+
+		// draw selection & captured
+		if (draw_path && (my_p0 || my_p1))
+		{
+			u8 s = my_p0 ? sw : sb;
+			u8 c = my_p0 ? cw : cb;
+
+			u8 x = c%8;
+			u8 y = Maths::Floor(c/8);
+
+			Board@ p = @table.board_pieces[x][y];
+			bool not_empty = p !is null && p.type != 0;
+
+			s8[] enemy_tiles;
+			s8[] move_tiles = p.get_move_tiles(c, p.color, enemy_tiles);
+
+			for (u8 j = 0; j < move_tiles.size(); j++)
+			{
+				s8 tile = move_tiles[j];
+				if (tile == s) continue;
+
+				Vec2f special_tile_offset = Vec2f(f32(tile%8) * tilesize, f32(Maths::Floor(tile/8)) * tilesize) + tl;
+				GUI::DrawRectangle(special_tile_offset, special_tile_offset + Vec2f(tilesize, tilesize), col_path);
+			}
+
+			for (u8 j = 0; j < enemy_tiles.size(); j++)
+			{
+				s8 tile = enemy_tiles[j];
+				Vec2f special_tile_offset = Vec2f(f32(tile%8) * tilesize, f32(Maths::Floor(tile/8)) * tilesize) + tl;
+				GUI::DrawRectangle(special_tile_offset, special_tile_offset + Vec2f(tilesize, tilesize), col_enemy);
 			}
 		}
-	
-		Vec2f tile_offset = Vec2f(f32(x) * tilesize, f32(y) * tilesize) + tl;
-		GUI::DrawRectangle(tile_offset, tile_offset + Vec2f(tilesize, tilesize), col);
 	}
 
-	// draw selection & captured
-	if (draw_path && (my_p0 || my_p1))
-	{
-		u8 s = my_p0 ? sw : sb;
-		u8 c = my_p0 ? cw : cb;
-
-		u8 x = c%8;
-		u8 y = Maths::Floor(c/8);
-
-		Board@ p = @table.board_pieces[x][y];
-		bool not_empty = p !is null && p.type != 0;
-
-		s8[] enemy_tiles;
-		s8[] move_tiles = p.get_move_tiles(c, p.color, enemy_tiles);
-
-		for (u8 j = 0; j < move_tiles.size(); j++)
-		{
-			s8 tile = move_tiles[j];
-			if (tile == s) continue;
-
-			Vec2f special_tile_offset = Vec2f(f32(tile%8) * tilesize, f32(Maths::Floor(tile/8)) * tilesize) + tl;
-			GUI::DrawRectangle(special_tile_offset, special_tile_offset + Vec2f(tilesize, tilesize), col_path);
-		}
-
-		for (u8 j = 0; j < enemy_tiles.size(); j++)
-		{
-			s8 tile = enemy_tiles[j];
-			Vec2f special_tile_offset = Vec2f(f32(tile%8) * tilesize, f32(Maths::Floor(tile/8)) * tilesize) + tl;
-			GUI::DrawRectangle(special_tile_offset, special_tile_offset + Vec2f(tilesize, tilesize), col_enemy);
-		}
-	}
-	
 	// draw icons
 	for (u8 i = 0; i < 64; i++)
 	{
@@ -580,7 +450,9 @@ void onRender(CSprite@ sprite)
 		{
 			Vec2f pos = driver.getWorldPosFromScreenPos(tile_offset - Vec2f(7,8) * factor);
 			if (p.icon_pos == Vec2f_zero) p.icon_pos = pos;
-			p.render_icon(pos, factor);
+
+			p.icon_pos = Vec2f_lerp(p.icon_pos, pos, 0.5f);
+			if (rendering) p.render_icon(pos, factor);
 		}
 	}
 
@@ -665,7 +537,6 @@ class Board // breaks solid, but who cares
 
 	void render_icon(Vec2f pos, f32 factor)
 	{
-		this.icon_pos = Vec2f_lerp(icon_pos, pos, 0.5f);
 		GUI::DrawIcon("ChessPieces.png", type-1+color*6, Vec2f(32,32), getDriver().getScreenPosFromWorldPos(icon_pos), factor);
 	}
 
@@ -1139,6 +1010,153 @@ class king : Board
 	}
 };
 
+void RequestSync(CBlob@ this)
+{
+	if (!isClient()) return;
+	
+	CPlayer@ local = getLocalPlayer();
+	if (local is null) return;
+
+	CBitStream params;
+	params.write_bool(true);
+	params.write_u16(local.getNetworkID());
+	this.SendCommand(this.getCommandID("sync"), params);
+}
+
+void Sync(CBlob@ this, u16 pid = 0)
+{
+	if (!isServer()) return;
+	
+	CPlayer@ p = pid == 0 ? null : getPlayerByNetworkId(pid);
+
+	Table@ table;
+	if (!this.get("Table", @table)) return;
+
+	CBitStream params1;
+	params1.write_bool(false);
+	params1.write_u16(0);
+	params1.write_u8(this.get_u8("selected_white"));
+	params1.write_u8(this.get_u8("selected_black"));
+	params1.write_s8(this.get_s8("captured_white"));
+	params1.write_s8(this.get_s8("captured_black"));
+	params1.write_bool(table.can_castle_white);
+	params1.write_bool(table.can_castle_black);
+	params1.write_u8(table.castling_rook_moved_white);
+	params1.write_u8(table.castling_rook_moved_black);
+	params1.write_bool(this.get_bool("reset_white"));
+	params1.write_bool(this.get_bool("reset_black"));
+	params1.write_bool(table.turn_white);
+	params1.write_bool(table.end);
+
+	for (u8 i = 0; i < 64; i++)
+	{
+		s8 x = i%8;
+		s8 y = Maths::Floor(i/8);
+
+		u8 type = 0;
+		s8 color = -1;
+
+		Board@ p = @table.board_pieces[x][y];
+		if (p !is null)
+		{
+			type = p.type;
+			color = p.color;
+		}
+
+		params1.write_u8(type);
+		params1.write_u8(color);
+	}
+
+	if (pid != 0 && p !is null) // sync to caster
+		this.server_SendCommandToPlayer(this.getCommandID("sync"), params1, p);
+	else // sync to all
+		this.SendCommand(this.getCommandID("sync"), params1);
+}
+
+void onCommand(CBlob@ this, u8 cmd, CBitStream@ params)
+{
+	if (cmd == this.getCommandID("sync"))
+	{
+		//
+		bool init = params.read_bool();
+		u16 send_to = params.read_u16();
+		
+		if (isServer() && init)
+		{
+			Sync(this, send_to);
+		}
+		if (isClient() && !init)
+		{
+			Table@ table;
+			if (!this.get("Table", @table)) return;
+
+			//
+			u8 selected_white = params.read_u8();
+			u8 selected_black = params.read_u8();
+			s8 captured_white = params.read_s8();
+			s8 captured_black = params.read_s8();
+
+			this.set_u8("selected_white", selected_white);
+			this.set_u8("selected_black", selected_black);
+			this.set_s8("captured_white", captured_white);
+			this.set_s8("captured_black", captured_black);
+
+			//
+			bool can_castle_white = params.read_bool();
+			bool can_castle_black = params.read_bool();
+			u8 castling_rook_moved_white = params.read_u8();
+			u8 castling_rook_moved_black = params.read_u8();
+
+			table.can_castle_white = can_castle_white;
+			table.can_castle_black = can_castle_black;
+			table.castling_rook_moved_white = castling_rook_moved_white;
+			table.castling_rook_moved_black = castling_rook_moved_black;
+
+			//
+			bool reset_white = params.read_bool();
+			bool reset_black = params.read_bool();
+
+			this.set_bool("reset_white", reset_white);
+			this.set_bool("reset_black", reset_black);
+
+			table.turn_white = params.read_bool();
+			table.end = params.read_bool();
+
+			for (s8 i = 0; i < 64; i++)
+			{
+				s8 x = i%8;
+				s8 y = Maths::Floor(i/8);
+
+				u8 type = 0;
+				s8 color = -1;
+
+				if (!params.saferead_u8(type) || !params.saferead_s8(color))
+				{
+					error("Error while syncing board at ["+x+"]["+y+"]");
+				}
+
+				@table.board_pieces[x][y] = MakePieceOnBoard(table, type, color);
+			}
+
+			this.set("Table", @table);
+		}
+	}
+	else if (cmd == this.getCommandID("reset"))
+	{
+		if (!isServer()) return;
+		s8 side = -1;
+
+		if (!params.saferead_s8(side))
+		{
+			error("Could not read side of resetting board ["+this.getNetworkID()+"]");
+			return;
+		}
+
+		if (side == 0) this.set_bool("reset_white", true);
+		else if (side == 1) this.set_bool("reset_black", true);
+	}
+}
+
 void PrintGameLog(CBlob@ this)
 {
 	Table@ table;
@@ -1186,7 +1204,7 @@ void PrintGameLog(CBlob@ this)
 		//print(tcpr_text);
 		tcpr(tcpr_text);
 	}
-}	
+}
 
 void ResetGameLog(CBlob@ this)
 {
@@ -1242,7 +1260,7 @@ void ResetBoard(CBlob@ this)
 
 bool canBePickedUp(CBlob@ this, CBlob@ byBlob)
 {
-	return true;
+	return !this.hasAttached();
 }
 
 bool canBePutInInventory(CBlob@ this, CBlob@ inventoryBlob)
@@ -1253,4 +1271,29 @@ bool canBePutInInventory(CBlob@ this, CBlob@ inventoryBlob)
 bool doesCollideWithBlob(CBlob@ this, CBlob@ blob)
 {
 	return false;
+}
+
+void onAttach(CBlob@ this, CBlob@ attached, AttachmentPoint@ attachedPoint)
+{
+	this.getShape().getConsts().mapCollisions = false;
+
+	if (attached is this)
+	{
+		AttachmentPoint@ ap0 = this.getAttachments().getAttachmentPointByName("PLAYER0");
+		AttachmentPoint@ ap1 = this.getAttachments().getAttachmentPointByName("PLAYER1");
+
+		if (ap0 is null || ap1 is null) return;
+
+		CBlob@ p0 = ap0.getOccupied();
+		CBlob@ p1 = ap1.getOccupied();
+
+		if (p0 !is null) p0.server_DetachFrom(this);
+		if (p1 !is null) p1.server_DetachFrom(this);
+	}
+}
+
+void onDetach(CBlob@ this, CBlob@ detached, AttachmentPoint@ attachedPoint)
+{
+	this.getShape().getConsts().mapCollisions = true;
+	this.setAngleDegrees(0);
 }
