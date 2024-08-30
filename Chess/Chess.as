@@ -1,4 +1,9 @@
-﻿void onInit(CBlob@ this)
+﻿// LIST OF KNOWN BUGS (i will never fix)
+// ====================================
+// render_icon interpolation does not work due to Sync: board on client is fully rebuilt when synced
+// ^ find out a hack or save signatures of all pieces in a board instead of creating new ones (kinda easy to ruin in AS)
+
+void onInit(CBlob@ this)
 {
 	this.addCommandID("sync");
 	this.addCommandID("reset");
@@ -26,7 +31,7 @@
 	ap0.SetKeysToTake(key_left | key_right | key_up | key_down | key_action1 | key_action2);
 	ap1.SetKeysToTake(key_left | key_right | key_up | key_down | key_action1 | key_action2);
 
-	if (isServer()) ResetGameLog(this);
+	ResetGameLog(this);
 }
 
 void RequestSync(CBlob@ this)
@@ -65,27 +70,25 @@ void Sync(CBlob@ this, u16 pid = 0)
 	params1.write_bool(this.get_bool("reset_white"));
 	params1.write_bool(this.get_bool("reset_black"));
 	params1.write_bool(table.turn_white);
+	params1.write_bool(table.end);
 
-	for (s8 i = 0; i < 64; i++)
+	for (u8 i = 0; i < 64; i++)
 	{
 		s8 x = i%8;
 		s8 y = Maths::Floor(i/8);
 
 		u8 type = 0;
 		s8 color = -1;
-		Vec2f icon_pos = Vec2f_zero;
 
 		Board@ p = @table.board_pieces[x][y];
 		if (p !is null)
 		{
 			type = p.type;
 			color = p.color;
-			icon_pos = p.icon_pos;
 		}
 
 		params1.write_u8(type);
 		params1.write_u8(color);
-		params1.write_Vec2f(icon_pos);
 	}
 
 	if (pid != 0 && p !is null) // sync to caster
@@ -141,6 +144,7 @@ void onCommand(CBlob@ this, u8 cmd, CBitStream@ params)
 			this.set_bool("reset_black", reset_black);
 
 			table.turn_white = params.read_bool();
+			table.end = params.read_bool();
 
 			for (s8 i = 0; i < 64; i++)
 			{
@@ -149,15 +153,13 @@ void onCommand(CBlob@ this, u8 cmd, CBitStream@ params)
 
 				u8 type = 0;
 				s8 color = -1;
-				Vec2f icon_pos = Vec2f_zero;
 
-				if (!params.saferead_u8(type) || !params.saferead_s8(color) || !params.saferead_Vec2f(icon_pos))
+				if (!params.saferead_u8(type) || !params.saferead_s8(color))
 				{
 					error("Error while syncing board at ["+x+"]["+y+"]");
 				}
 
 				@table.board_pieces[x][y] = MakePieceOnBoard(table, type, color);
-				table.board_pieces[x][y].icon_pos = icon_pos;
 			}
 
 			this.set("Table", @table);
@@ -181,7 +183,6 @@ void onCommand(CBlob@ this, u8 cmd, CBitStream@ params)
 
 void onTick(CBlob@ this)
 {
-	//Sync(this);
 	if (isServer() && this.get_bool("reset_white") && this.get_bool("reset_black"))
 	{
 		PrintGameLog(this);
@@ -209,6 +210,8 @@ void onTick(CBlob@ this)
 	CBlob@ p0 = ap0.getOccupied();
 	CBlob@ p1 = ap1.getOccupied();
 
+	bool localhost = isServer() && isClient();
+
 	// white controls
 	if (p0 !is null)
 	{
@@ -222,68 +225,71 @@ void onTick(CBlob@ this)
 				this.SendCommand(this.getCommandID("reset"), params);
 			}
 		}
-
-		u16 p0_id = p0.getNetworkID();
-		u16 cplayer_id = p0.getPlayer() is null ? 0 : p0.getPlayer().getNetworkID();
-
-		u8 sw = this.get_u8("selected_white");
-		s8 cw = this.get_s8("captured_white");
-
-		if (ap0.isKeyJustPressed(key_left) && sw % 8 != 0) sw -= 1;
-		if (ap0.isKeyJustPressed(key_right) && sw % 8 != 7) sw += 1;
-		if (ap0.isKeyJustPressed(key_up) && Maths::Floor(sw/8) != 0) sw -= 8;
-		if (ap0.isKeyJustPressed(key_down) && Maths::Floor(sw/8) != 7) sw += 8;
-
-		if (ap0.isKeyJustPressed(key_action1) && table.turn_white)
+		
+		if (!table.end)
 		{
-			Board@ target = @table.board_pieces[sw%8][Maths::Floor(sw/8)];
-			bool not_null = target !is null;
-			bool not_empty = not_null && target.type != 0;
-			
-			if (cw != -1 && not_null && target.color != 0)
+			u16 p0_id = p0.getNetworkID();
+			u16 cplayer_id = p0.getPlayer() is null ? 0 : p0.getPlayer().getNetworkID();
+
+			u8 sw = this.get_u8("selected_white");
+			s8 cw = this.get_s8("captured_white");
+
+			if (ap0.isKeyJustPressed(key_left) && sw % 8 != 0) sw -= 1;
+			if (ap0.isKeyJustPressed(key_right) && sw % 8 != 7) sw += 1;
+			if (ap0.isKeyJustPressed(key_up) && Maths::Floor(sw/8) != 0) sw -= 8;
+			if (ap0.isKeyJustPressed(key_down) && Maths::Floor(sw/8) != 7) sw += 8;
+
+			if (ap0.isKeyJustPressed(key_action1) && (localhost || table.turn_white))
 			{
-				if (target.move_to(cw, sw, cplayer_id))
+				Board@ target = @table.board_pieces[sw%8][Maths::Floor(sw/8)];
+				bool not_null = target !is null;
+				bool not_empty = not_null && target.type != 0;
+
+				if (cw != -1 && not_null && target.color != 0)
+				{
+					if (target.move_to(cw, sw, false, cplayer_id))
+					{
+						if (isServer())
+						{
+							cw = -1;
+							Sync(this);
+						}
+					}
+
+				}
+				else if (cw == -1 && not_empty && target.color == 0)
 				{
 					if (isServer())
 					{
-						cw = -1;
-						Sync(this);
+						cw = sw;
+						Sync(this, p0_id);
 					}
-					if (isClient()){}
-						// playsound here (place)
+					if (isClient())
+					{
+						this.getSprite().PlaySound("board_select.ogg", 0.25f, 1.0f);
+					}
 				}
-				
 			}
-			else if (cw == -1 && not_empty && target.color == 0)
+			else if (ap0.isKeyJustPressed(key_action2))
 			{
+				if (isClient() && cw != -1)
+				{
+					this.getSprite().PlaySound("board_fail_select.ogg", 0.33f, 1.0f);
+				}
 				if (isServer())
 				{
-					cw = sw;
+					cw = -1;
 					Sync(this, p0_id);
 				}
-				if (isClient()) {}
-					// playsound here (select)
 			}
-			else if (isClient()) {}
-				// playsound here (fail place or fail select)
-		}
-		else if (ap0.isKeyJustPressed(key_action2))
-		{
+
 			if (isServer())
 			{
-				cw = -1;
-				Sync(this, p0_id);
+				this.set_u8("selected_white", sw);
+				this.Sync("selected_white", true);
+				this.set_s8("captured_white", cw);
+				this.Sync("captured_white", true);
 			}
-			if (isClient()) {}
-				// playsound here (remove select)
-		}
-
-		if (isServer())
-		{
-			this.set_u8("selected_white", sw);
-			this.Sync("selected_white", true);
-			this.set_s8("captured_white", cw);
-			this.Sync("captured_white", true);
 		}
 	}
 
@@ -301,78 +307,82 @@ void onTick(CBlob@ this)
 			}
 		}
 
-		u16 p1_id = p1.getNetworkID();
-		u16 cplayer_id = p1.getPlayer() is null ? 0 : p1.getPlayer().getNetworkID();
-
-		u8 sb = this.get_u8("selected_black");
-		s8 cb = this.get_s8("captured_black");
-
-		if (ap1.isKeyJustPressed(key_left) && sb % 8 != 0) sb -= 1;
-		if (ap1.isKeyJustPressed(key_right) && sb % 8 != 7) sb += 1;
-		if (ap1.isKeyJustPressed(key_up) && Maths::Floor(sb/8) != 0) sb -= 8;
-		if (ap1.isKeyJustPressed(key_down) && Maths::Floor(sb/8) != 7) sb += 8;
-
-		if (ap1.isKeyJustPressed(key_action1) && !table.turn_white)
+		if (!table.end)
 		{
-			Board@ target = @table.board_pieces[sb%8][Maths::Floor(sb/8)];
-			bool not_null = target !is null;
-			bool not_empty = not_null && target.type != 0;
-			
-			if (cb != -1 && not_null && target.color != 1)
+			u16 p1_id = p1.getNetworkID();
+			u16 cplayer_id = p1.getPlayer() is null ? 0 : p1.getPlayer().getNetworkID();
+
+			u8 sb = this.get_u8("selected_black");
+			s8 cb = this.get_s8("captured_black");
+
+			if (ap1.isKeyJustPressed(key_left) && sb % 8 != 0) sb -= 1;
+			if (ap1.isKeyJustPressed(key_right) && sb % 8 != 7) sb += 1;
+			if (ap1.isKeyJustPressed(key_up) && Maths::Floor(sb/8) != 0) sb -= 8;
+			if (ap1.isKeyJustPressed(key_down) && Maths::Floor(sb/8) != 7) sb += 8;
+
+			if (ap1.isKeyJustPressed(key_action1) && (localhost || !table.turn_white))
 			{
-				if (target.move_to(cb, sb, cplayer_id))
+				Board@ target = @table.board_pieces[sb%8][Maths::Floor(sb/8)];
+				bool not_null = target !is null;
+				bool not_empty = not_null && target.type != 0;
+
+				if (cb != -1 && not_null && target.color != 1)
+				{
+					if (target.move_to(cb, sb, false, cplayer_id))
+					{
+						if (isServer())
+						{
+							cb = -1;
+							Sync(this);
+						}
+					}
+
+				}
+				else if (cb == -1 && not_empty && target.color == 1)
 				{
 					if (isServer())
 					{
-						cb = -1;
-						Sync(this);
+						cb = sb;
+						Sync(this, p1_id);
 					}
-					if (isClient()){}
-						// playsound here (place)
+					if (isClient())
+					{
+						this.getSprite().PlaySound("board_select.ogg", 0.33f, 1.0f);
+					}
 				}
-				
 			}
-			else if (cb == -1 && not_empty && target.color == 1)
+			else if (ap1.isKeyJustPressed(key_action2))
 			{
+				if (isClient() && cb != -1)
+				{
+					this.getSprite().PlaySound("board_fail_select.ogg", 0.33f, 1.0f);
+				}
 				if (isServer())
 				{
-					cb = sb;
+					cb = -1;
 					Sync(this, p1_id);
 				}
-				if (isClient()) {}
-					// playsound here (select)
 			}
-			else if (isClient()) {}
-				// playsound here (fail place or fail select)
-		}
-		else if (ap1.isKeyJustPressed(key_action2))
-		{
+
 			if (isServer())
 			{
-				cb = -1;
-				Sync(this, p1_id);
+				this.set_u8("selected_black", sb);
+				this.Sync("selected_black", true);
+				this.set_s8("captured_black", cb);
+				this.Sync("captured_black", true);
 			}
-			if (isClient()) {}
-				// playsound here (remove select)
-		}
-
-		if (isServer())
-		{
-			this.set_u8("selected_black", sb);
-			this.Sync("selected_black", true);
-			this.set_s8("captured_black", cb);
-			this.Sync("captured_black", true);
 		}
 	}
 }
 
 const SColor col_white = SColor(215,255,255,255);
 const SColor col_black = SColor(215,15,15,15);
-const SColor col_selection = SColor(85,255,255,0);
+const SColor col_selection = SColor(140,255,255,0);
 const SColor col_selection_disabled = col_enemy;
-const SColor col_captured = SColor(85,0,0,255);
-const SColor col_enemy = SColor(85,255,0,0);
-const SColor col_path = SColor(85,0,255,0);
+const SColor col_captured = SColor(140,0,0,255);
+const SColor col_enemy = SColor(140,255,0,0);
+const SColor col_path = SColor(140,0,255,0);
+const string[] cols = {"A","B","C","D","E","F","G","H"};
 
 f32 old_factor = 0;
 void onRender(CSprite@ sprite)
@@ -386,18 +396,21 @@ void onRender(CSprite@ sprite)
 
 	Table@ table;
 	if (!this.get("Table", @table)) return;
-
+	
 	Driver@ driver = getDriver();
+	Vec2f thispos = this.getPosition();
 	Vec2f offset = Vec2f(0, -24.0f);
-	Vec2f pos2d = driver.getScreenPosFromWorldPos(Vec2f_lerp(this.getOldPosition() + offset, this.getPosition() + offset, getInterpolationFactor()));
+	Vec2f oldpos2d = driver.getScreenPosFromWorldPos(this.getOldPosition() + offset);
+	Vec2f pos2d_raw = driver.getScreenPosFromWorldPos(thispos + offset);
+	Vec2f pos2d = Vec2f_lerp(oldpos2d, pos2d_raw, getInterpolationFactor());
 	f32 area = tilesize * 8;
 
 	//if (!this.hasAttached()) return;
 	CBlob@ local = getLocalPlayerBlob();
 	if (local !is null && !local.isAttachedTo(this))
 	{
-		Vec2f mpos = getControls().getInterpMouseScreenPos();
-		if ((mpos-pos2d).Length() > 128.0f) return;
+		Vec2f mpos = driver.getWorldPosFromScreenPos(getControls().getInterpMouseScreenPos());
+		if ((mpos-thispos).Length() > this.getRadius()+4.0f) return;
 	}
 
 	AttachmentPoint@ ap0 = this.getAttachments().getAttachmentPointByName("PLAYER0");
@@ -412,6 +425,7 @@ void onRender(CSprite@ sprite)
 
 	Vec2f tl = pos2d - Vec2f(area/2, area);
 	Vec2f br = pos2d + Vec2f(area/2, 0);
+	f32 factor = tilesize/24.0f*0.5f;
 
 	Vec2f frameoffset = Vec2f(4,4);
 	GUI::DrawFramedPane(tl-frameoffset+Vec2f(0,frameoffset.y), tl+Vec2f(0,area)); // left
@@ -419,10 +433,47 @@ void onRender(CSprite@ sprite)
 	GUI::DrawFramedPane(br-Vec2f(area+frameoffset.x*2, 0), br+frameoffset+Vec2f(frameoffset.x,0)); // bottom
 	GUI::DrawFramedPane(br-Vec2f(0, area), br+frameoffset-Vec2f(0,frameoffset.y)); // right
 
+	// rows
+	GUI::SetFont("menu");
+	for (u8 i = 0; i < 8; i++)
+	{
+		f32 row_offset = (area/8)*(i+1);
+		GUI::DrawTextCentered(""+(i+1), tl+Vec2f(-16, area - row_offset + (area/8)/2) - 1.5f, SColor(225,255,255,255));
+	}
+
+	// cols
+	for (u8 i = 0; i < 8; i++)
+	{
+		f32 col_offset = (area/8)*i;
+		GUI::DrawTextCentered(cols[i], tl+Vec2f(col_offset + (area/8)/2, area + 16) - 4.0f, SColor(225,255,255,255));
+	}
+
+	// history
+	string[]@ chess_player;
+	u8[] game_from;
+	u8[] game_to;
+	if (this.get("chess_player", @chess_player) && this.get("game_from", game_from) && this.get("game_to", game_to))
+	{
+		for (u8 i = 0; i < Maths::Min(8, chess_player.size()); i++)
+		{
+			f32 row_offset = (area/8)*i;
+
+			s8 from_x = game_from[i]%8;
+			s8 from_y = 8 - Maths::Floor(game_from[i]/8);
+
+			s8 to_x = game_to[i]%8;
+			s8 to_y = 8 - Maths::Floor(game_to[i]/8);
+
+			string[] spl = chess_player[i].split("_");
+			string text = (spl[0] == "-1" ? "Rules" : spl[0] == "0" ? "White" : "Black ")+": "+cols[from_x]+""+from_y+" - "+cols[to_x]+""+to_y;
+			
+			GUI::DrawText(text, tl+Vec2f(area+16, row_offset + (area/8)/2) - 1.5f, SColor(225,255,255,255));
+		}
+	}
+
 	if (u_showtutorial && (my_p0 || my_p1))
 	{
 		bool reset = my_p0 ? this.get_bool("reset_white") : this.get_bool("reset_black");
-		GUI::SetFont("menu");
 		GUI::DrawTextCentered(reset ? "Waiting for opponent to reset the game..."
 			: "Press [END] key to reset the game\n     (Both players should press)", tl + Vec2f(area/2, area+128.0f), SColor(100,255,255,255));
 	
@@ -430,7 +481,6 @@ void onRender(CSprite@ sprite)
 	}
 
 	bool draw_path = false;
-	f32 factor = tilesize/24.0f*0.5f;
 
 	u8 sw = this.get_u8("selected_white");
 	s8 cw = this.get_s8("captured_white");
@@ -546,6 +596,7 @@ class Table
 	u8 castling_rook_moved_black;
 	bool turn_white;
 	array<array<Board@>> board_pieces();
+	bool end;
 
 	Table()
 	{
@@ -556,6 +607,7 @@ class Table
 		castling_rook_moved_black = 0;
 		turn_white = true;
 		board_pieces = array<array<Board@>>(8, array<Board@>(8, MakePieceOnBoard(@this, 0, -1)));
+		end = false;
 	}
 
 	Board@[][] get_board()
@@ -613,7 +665,7 @@ class Board // breaks solid, but who cares
 
 	void render_icon(Vec2f pos, f32 factor)
 	{
-		icon_pos = Vec2f_lerp(icon_pos, pos, 0.33f);
+		this.icon_pos = Vec2f_lerp(icon_pos, pos, 0.5f);
 		GUI::DrawIcon("ChessPieces.png", type-1+color*6, Vec2f(32,32), getDriver().getScreenPosFromWorldPos(icon_pos), factor);
 	}
 
@@ -844,7 +896,7 @@ class Board // breaks solid, but who cares
 		return arr;
 	}
 
-	bool move_to(s8 pos, s8 dest, const u16 pid = 0)
+	bool move_to(s8 pos, s8 dest, bool force = false, const u16 pid = 0)
 	{
 		Board@[][] board_pieces = get_board();
 		
@@ -863,14 +915,20 @@ class Board // breaks solid, but who cares
 			return false;
 		}
 
-		if (table.turn_white ? on_pos.color == 1 : on_pos.color == 0)
+		bool localhost = isServer() && isClient();
+		if (!localhost && (table.turn_white ? on_pos.color == 1 : on_pos.color == 0))
 		{
 			return false;
 		}
 
+		CBlob@ blob = getBlobByNetworkID(table.id);
 		s8[] enemy_tiles;
 		s8[] move_tiles = on_pos.get_move_tiles(pos, on_pos.color, enemy_tiles);
-		if (enemy_tiles.find(dest) == -1 && move_tiles.find(dest) == -1) return false;
+		if (!force && enemy_tiles.find(dest) == -1 && move_tiles.find(dest) == -1)
+		{
+			warn("Tried to move piece to wrong position: ["+x+"]["+y+"] - ["+dest_x+"]["+dest_y+"]");
+			return false;
+		}
 
 		s8 obstacle = has_obstacle(dest, on_pos.color);
 		if (obstacle == 0)
@@ -879,30 +937,20 @@ class Board // breaks solid, but who cares
 			return false;
 		}
 
-		@board_pieces[dest_x][dest_y] = on_pos;
-		@board_pieces[x][y] = MakePieceOnBoard(table, 0, -1);
-		set_board(board_pieces);
-		
-		on_move_tile(pos, dest);
-		
-		string[]@ chess_player;
-		u8[] game_from;
-		u8[] game_to;
-	
-		CBlob@ blob = getBlobByNetworkID(table.id);
-		if (blob !is null && blob.get("chess_player", @chess_player) && blob.get("game_from", game_from) && blob.get("game_to", game_to))
+		if (isClient() && blob !is null)
 		{
-			CPlayer@ player = pid == 0 ? null : getPlayerByNetworkId(pid);
-
-			chess_player.push_back(pid == 0 ? "Chess rules" : (player !is null ? player.getUsername() : "Unknown"));
-			game_from.push_back(Maths::Clamp(pos, 0, 63));
-			game_to.push_back(Maths::Clamp(dest, 0, 63));
-
-			blob.set("chess_player", @chess_player);
-			blob.set("game_from", game_from);
-			blob.set("game_to", game_to);
+			if (on_dest !is null && on_dest.type != 0)
+				blob.getSprite().PlaySound("board_cap.ogg", 0.33f, 1.0f);
 		}
 
+		@board_pieces[dest_x][dest_y] = @on_pos;
+		@board_pieces[x][y] = MakePieceOnBoard(table, 0, -1);
+		
+		set_board(board_pieces);
+		on_move_tile(pos, dest);
+		log(blob, pos, dest, pid, on_pos.color);
+
+		if (on_dest.type == 6) end_game(on_dest.color);
 		return true;
 	}
 	
@@ -939,19 +987,47 @@ class Board // breaks solid, but who cares
 					if (can_move_left && old_x == 4 && x == 2)
 					{
 						Board@ rook = @table.board_pieces[0][7];
-						if (rook !is null) rook.move_to(56, 59);
+						if (rook !is null && rook.move_to(56, 59, true))
+						{}
 					}
 					if (can_move_right && old_x == 4 && x == 6)
 					{
 						Board@ rook = @table.board_pieces[7][7];
-						if (rook !is null) rook.move_to(63, 61);
+						if (rook !is null && rook.move_to(63, 61, true))
+						{}
 					}
+
+					CBlob@ blob = getBlobByNetworkID(table.id);
+					if (blob !is null) Sync(blob);
 				}
 
 				table.can_castle_white = false;
 			}
 			else
 			{
+				if (table.can_castle_black)
+				{
+					bool can_move_any = table.castling_rook_moved_black == 0;
+					bool can_move_left = table.castling_rook_moved_black == 2 || can_move_any;
+					bool can_move_right = table.castling_rook_moved_black == 1 || can_move_any;
+
+					if (can_move_left && old_x == 4 && x == 2)
+					{
+						Board@ rook = @table.board_pieces[0][0];
+						if (rook !is null && rook.move_to(0, 3, true))
+						{}
+					}
+					if (can_move_right && old_x == 4 && x == 6)
+					{
+						Board@ rook = @table.board_pieces[7][0];
+						if (rook !is null && rook.move_to(7, 5, true))
+						{}
+					}
+
+					CBlob@ blob = getBlobByNetworkID(table.id);
+					if (blob !is null) Sync(blob);
+				}
+
 				table.can_castle_black = false;
 			}
 		}
@@ -979,6 +1055,30 @@ class Board // breaks solid, but who cares
 	void end_turn(s8 team)
 	{
 		table.turn_white = !table.turn_white;
+	}
+
+	void end_game(s8 team)
+	{
+		table.end = true;
+	}
+
+	void log(CBlob@ blob, s8 pos, s8 dest, s8 pid = 0, s8 team = -1)
+	{
+		string[]@ chess_player;
+		u8[] game_from;
+		u8[] game_to;
+		if (blob !is null && blob.get("chess_player", @chess_player) && blob.get("game_from", game_from) && blob.get("game_to", game_to))
+		{
+			CPlayer@ player = pid == 0 ? null : getPlayerByNetworkId(pid);
+
+			chess_player.push_back(pid == 0 ? "-1_Chess rules" : (player !is null ? team+"_"+player.getUsername() : "-1_Unknown"));
+			game_from.push_back(Maths::Clamp(pos, 0, 63));
+			game_to.push_back(Maths::Clamp(dest, 0, 63));
+
+			blob.set("chess_player", @chess_player);
+			blob.set("game_from", game_from);
+			blob.set("game_to", game_to);
+		}
 	}
 };
 
@@ -1146,6 +1246,11 @@ bool canBePickedUp(CBlob@ this, CBlob@ byBlob)
 }
 
 bool canBePutInInventory(CBlob@ this, CBlob@ inventoryBlob)
+{
+	return false;
+}
+
+bool doesCollideWithBlob(CBlob@ this, CBlob@ blob)
 {
 	return false;
 }
