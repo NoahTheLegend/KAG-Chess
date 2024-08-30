@@ -450,6 +450,8 @@ void onRender(CSprite@ sprite)
 			for (u8 j = 0; j < enemy_tiles.size(); j++)
 			{
 				s8 tile = enemy_tiles[j];
+				if (tile == s) continue;
+				
 				Vec2f special_tile_offset = Vec2f(f32(tile%8) * tilesize, f32(Maths::Floor(tile/8)) * tilesize) + tl;
 				GUI::DrawRectangle(special_tile_offset, special_tile_offset + Vec2f(tilesize, tilesize), col_enemy);
 			}
