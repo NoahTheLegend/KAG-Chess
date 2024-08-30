@@ -1,16 +1,18 @@
-﻿// LIST OF KNOWN BUGS (i will never fix)
+﻿// LIST OF KNOWN BUGS
 // ====================================
-// render_icon interpolation does not work due to Sync: board on client is fully rebuilt when synced
-// ^ find out a hack or save signatures of all pieces in a board instead of creating new ones (kinda easy to ruin in AS)
+// render_icon interpolation does not work properly due to Sync: board on client is fully rebuilt when synced
+// ^ find out a better hack or save signatures of all pieces in a board instead of creating new ones (kinda easy to ruin in AS)
+// ^ currently Sync() is delayed for sync_delay amount of ticks
 // ------------------------------------
-// when attached to player and chess blob is partially inside map, the rendered board microshakes until ended
-// collision with map at least once
+// when attached to player and chess blob is partially inside map, the rendered board microshakes until finished
+// colliding with map at least once
 // ------------------------------------
 
 // README
 // secondary seat (black) has fixed facepos of attachment point, after including this file in a mod, you should
 // perform changes to Seats.as using "seat turn around" tag to avoid hard setting occupied facepos
 
+const u8 sync_delay = 30;
 void onInit(CBlob@ this)
 {
 	this.addCommandID("sync");
@@ -30,6 +32,9 @@ void onInit(CBlob@ this)
 	this.set_bool("reset_white", false); // both of players should send a command
 	this.set_bool("reset_black", false);
 
+	this.set_u32("sync_time", 0);
+	this.set_u16("sync_pid", 0);
+
 	this.getSprite().SetRelativeZ(-50);
 	if (isClient()) this.set_f32("tilesize", 24.0f * getCamera().targetDistance);
 
@@ -46,16 +51,27 @@ void onInit(CBlob@ this)
 
 void onTick(CBlob@ this)
 {
-	if (isServer() && this.get_bool("reset_white") && this.get_bool("reset_black"))
+	if (isServer())
 	{
-		PrintGameLog(this);
-		ResetGameLog(this);
+		if (this.get_u32("sync_time") >= getGameTime())
+		{
+			SendSyncFromServer(this);
 
-		this.set_bool("reset_white", false);
-		this.set_bool("reset_black", false);
+			this.set_u32("sync_time", 0);
+			this.set_u16("sync_pid", 0);
+		}
 
-		ResetBoard(this);
-		Sync(this);
+		if (this.get_bool("reset_white") && this.get_bool("reset_black"))
+		{
+			PrintGameLog(this);
+			ResetGameLog(this);
+
+			this.set_bool("reset_white", false);
+			this.set_bool("reset_black", false);
+
+			ResetBoard(this);
+			Sync(this);
+		}
 	}
 
 	if (this.isAttached())
@@ -130,11 +146,11 @@ void onTick(CBlob@ this)
 					if (isServer())
 					{
 						cw = sw;
-						Sync(this, p0_id);
+						Sync(this, false, p0_id);
 					}
 					if (isClient())
 					{
-						this.getSprite().PlaySound("board_select.ogg", 0.25f, 1.0f);
+						this.getSprite().PlaySound("board_select.ogg", 0.25f, 1.1f);
 					}
 				}
 			}
@@ -142,12 +158,12 @@ void onTick(CBlob@ this)
 			{
 				if (isClient() && cw != -1)
 				{
-					this.getSprite().PlaySound("board_fail_select.ogg", 0.33f, 1.0f);
+					this.getSprite().PlaySound("board_fail_select.ogg", 0.25f, 1.0f);
 				}
 				if (isServer())
 				{
 					cw = -1;
-					Sync(this, p0_id);
+					Sync(this, false, p0_id);
 				}
 			}
 
@@ -211,11 +227,11 @@ void onTick(CBlob@ this)
 					if (isServer())
 					{
 						cb = sb;
-						Sync(this, p1_id);
+						Sync(this, false, p1_id);
 					}
 					if (isClient())
 					{
-						this.getSprite().PlaySound("board_select.ogg", 0.33f, 1.0f);
+						this.getSprite().PlaySound("board_select.ogg", 0.25f, 1.1f);
 					}
 				}
 			}
@@ -223,12 +239,12 @@ void onTick(CBlob@ this)
 			{
 				if (isClient() && cb != -1)
 				{
-					this.getSprite().PlaySound("board_fail_select.ogg", 0.33f, 1.0f);
+					this.getSprite().PlaySound("board_fail_select.ogg", 0.25f, 1.0f);
 				}
 				if (isServer())
 				{
 					cb = -1;
-					Sync(this, p1_id);
+					Sync(this, false, p1_id);
 				}
 			}
 
@@ -323,9 +339,10 @@ void onRender(CSprite@ sprite)
 		u8[] game_to;
 		if (this.get("chess_player", @chess_player) && this.get("game_from", game_from) && this.get("game_to", game_to))
 		{
-			for (u8 i = chess_player.size(); i > Maths::Max(0, chess_player.size()); i--)
+			s8 s = Maths::Min(chess_player.size(), 8);
+			for (s8 i = 0; i < s; i++)
 			{
-				f32 row_offset = (area/8)*i;
+				f32 row_offset = (area/8)*(s-i);
 
 				s8 from_x = game_from[i]%8;
 				s8 from_y = 8 - Maths::Floor(game_from[i]/8);
@@ -336,7 +353,7 @@ void onRender(CSprite@ sprite)
 				string[] spl = chess_player[i].split("_");
 				string text = (spl[0] == "-1" ? "Rules" : spl[0] == "0" ? "White" : "Black ")+": "+cols[from_x]+""+from_y+" - "+cols[to_x]+""+to_y;
 
-				GUI::DrawText(text, tl+Vec2f(area+16, row_offset) - 1.5f, SColor(225,255,255,255));
+				GUI::DrawText(text, tl+Vec2f(area+16, row_offset - (area/8)/2) - 1.5f, SColor(225,255,255,255));
 			}
 		}
 
@@ -451,8 +468,8 @@ void onRender(CSprite@ sprite)
 			Vec2f pos = driver.getWorldPosFromScreenPos(tile_offset - Vec2f(7,8) * factor);
 			if (p.icon_pos == Vec2f_zero) p.icon_pos = pos;
 
-			p.icon_pos = Vec2f_lerp(p.icon_pos, pos, 0.5f);
-			if (rendering) p.render_icon(pos, factor);
+			p.icon_pos = Vec2f_lerp(p.icon_pos, pos, 0.33f);
+			if (rendering) p.render_icon(factor);
 		}
 	}
 
@@ -535,7 +552,7 @@ class Board // breaks solid, but who cares
 		inf = _inf;
 	}
 
-	void render_icon(Vec2f pos, f32 factor)
+	void render_icon(f32 factor)
 	{
 		GUI::DrawIcon("ChessPieces.png", type-1+color*6, Vec2f(32,32), getDriver().getScreenPosFromWorldPos(icon_pos), factor);
 	}
@@ -812,6 +829,8 @@ class Board // breaks solid, but who cares
 		{
 			if (on_dest !is null && on_dest.type != 0)
 				blob.getSprite().PlaySound("board_cap.ogg", 0.33f, 1.0f);
+			else
+				blob.getSprite().PlaySound("board_move.ogg", 0.33f, 1.0f);
 		}
 
 		@board_pieces[dest_x][dest_y] = @on_pos;
@@ -841,7 +860,6 @@ class Board // breaks solid, but who cares
 		if (p.type == 1 && (p.color == 0 ? y == 0 : y == 7))
 		{
 			Board@ np = MakePieceOnBoard(table, 5, p.color);
-			np.icon_pos = p.icon_pos;
 			@board_pieces[x][y] = np;
 			set_board(board_pieces);
 		}
@@ -1023,9 +1041,18 @@ void RequestSync(CBlob@ this)
 	this.SendCommand(this.getCommandID("sync"), params);
 }
 
-void Sync(CBlob@ this, u16 pid = 0)
+void Sync(CBlob@ this, bool immediate = false, u16 pid = 0)
 {
 	if (!isServer()) return;
+
+	this.set_u32("sync_time", getGameTime()+(immediate ? 1 : sync_delay));
+	this.set_u16("sync_pid", pid);
+}
+
+void SendSyncFromServer(CBlob@ this)
+{
+	if (!isServer()) return;
+	u16 pid = this.get_u16("sync_pid");
 	
 	CPlayer@ p = pid == 0 ? null : getPlayerByNetworkId(pid);
 
@@ -1053,16 +1080,19 @@ void Sync(CBlob@ this, u16 pid = 0)
 		s8 x = i%8;
 		s8 y = Maths::Floor(i/8);
 
+		Vec2f icon_pos = Vec2f_zero;
 		u8 type = 0;
 		s8 color = -1;
 
 		Board@ p = @table.board_pieces[x][y];
 		if (p !is null)
 		{
+			icon_pos = p.icon_pos;
 			type = p.type;
 			color = p.color;
 		}
 
+		params1.write_Vec2f(icon_pos);
 		params1.write_u8(type);
 		params1.write_u8(color);
 	}
@@ -1083,7 +1113,7 @@ void onCommand(CBlob@ this, u8 cmd, CBitStream@ params)
 		
 		if (isServer() && init)
 		{
-			Sync(this, send_to);
+			Sync(this, true, send_to);
 		}
 		if (isClient() && !init)
 		{
@@ -1127,15 +1157,17 @@ void onCommand(CBlob@ this, u8 cmd, CBitStream@ params)
 				s8 x = i%8;
 				s8 y = Maths::Floor(i/8);
 
+				Vec2f icon_pos = Vec2f_zero;
 				u8 type = 0;
 				s8 color = -1;
 
-				if (!params.saferead_u8(type) || !params.saferead_s8(color))
+				if (!params.saferead_Vec2f(icon_pos) || !params.saferead_u8(type) || !params.saferead_s8(color))
 				{
 					error("Error while syncing board at ["+x+"]["+y+"]");
 				}
 
 				@table.board_pieces[x][y] = MakePieceOnBoard(table, type, color);
+				table.board_pieces[x][y].icon_pos = icon_pos;
 			}
 
 			this.set("Table", @table);
