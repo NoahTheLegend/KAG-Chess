@@ -362,7 +362,7 @@ void onRender(CSprite@ sprite)
 		}
 
 		// F1 help menu
-		bool reset = my_p0 ? this.get_bool("reset_white") : this.get_bool("reset_black");
+		bool reset = my_p0 ? this.get_bool("reset_white") : my_p1 ? this.get_bool("reset_black") : false;
 		if ((reset || u_showtutorial) && (my_p0 || my_p1))
 		{
 			GUI::DrawTextCentered(reset ? "Waiting for opponent to reset the game..."
@@ -1207,8 +1207,16 @@ void onCommand(CBlob@ this, u8 cmd, CBitStream@ params)
 			return;
 		}
 
-		if (side == 0) this.set_bool("reset_white", !this.get_bool("reset_white"));
-		else if (side == 1) this.set_bool("reset_black", !this.get_bool("reset_black"));
+		if (side == 0)
+		{
+			this.set_bool("reset_white", !this.get_bool("reset_white"));
+			this.Sync("reset_white", true);
+		}
+		else if (side == 1)
+		{
+			this.set_bool("reset_black", !this.get_bool("reset_black"));
+			this.Sync("reset_black", true);
+		}
 
 		// reset event check
 		if (this.get_bool("reset_white") && this.get_bool("reset_black"))
