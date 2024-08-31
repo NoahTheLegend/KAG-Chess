@@ -1353,8 +1353,6 @@ bool doesCollideWithBlob(CBlob@ this, CBlob@ blob)
 // avoid shitty exploiting when two objects are plugged into each other
 void onAttach(CBlob@ this, CBlob@ attached, AttachmentPoint@ attachedPoint)
 {
-	this.getShape().getConsts().mapCollisions = false;
-
 	if (attached is this)
 	{
 		AttachmentPoint@ ap0 = this.getAttachments().getAttachmentPointByName("PLAYER0");
@@ -1373,7 +1371,6 @@ void onAttach(CBlob@ this, CBlob@ attached, AttachmentPoint@ attachedPoint)
 // reset visuals
 void onDetach(CBlob@ this, CBlob@ detached, AttachmentPoint@ attachedPoint)
 {
-	this.getShape().getConsts().mapCollisions = true;
 	this.setAngleDegrees(0);
 }
 
