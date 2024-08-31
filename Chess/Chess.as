@@ -954,7 +954,7 @@ class Board // breaks solid, but who cares
 			}
 		}
 		
-		end_turn(p.color);
+		if (p.color == 0 || p.color == 1) end_turn(p.color);
 	}
 
 	// another unnecessary hook
