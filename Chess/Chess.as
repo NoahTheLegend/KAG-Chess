@@ -324,14 +324,14 @@ void onRender(CSprite@ sprite)
 		for (u8 i = 0; i < 8; i++)
 		{
 			f32 row_offset = (area/8)*(i+1);
-			GUI::DrawTextCentered(""+(i+1), tl+Vec2f(-16, area - row_offset + (area/8)/2) - 1.5f, SColor(225,255,255,255));
+			GUI::DrawTextCentered(""+(i+1), tl+Vec2f(-16, area - row_offset + (area/8)/2 - 1.5f), SColor(225,255,255,255));
 		}
 
 		// cols
 		for (u8 i = 0; i < 8; i++)
 		{
 			f32 col_offset = (area/8)*i;
-			GUI::DrawTextCentered(cols[i], tl+Vec2f(col_offset + (area/8)/2, area + 16) - 4.0f, SColor(225,255,255,255));
+			GUI::DrawTextCentered(cols[i], tl+Vec2f(col_offset + (area/8)/2, area + 16 - 4.0f), SColor(225,255,255,255));
 		}
 
 		// movement history
@@ -357,7 +357,7 @@ void onRender(CSprite@ sprite)
 			    string[] spl = chess_player[actual_index].split("_");
 			    string text = (spl[0] == "-1" ? "Rules" : spl[0] == "0" ? "White" : "Black") + ": " + cols[from_x] + "" + from_y + " - " + cols[to_x] + "" + to_y;
 
-			    GUI::DrawText(text, tl + Vec2f(area + 16, row_offset - (area / 8)) + 1.5f, SColor(225, 255, 255, 255));
+			    GUI::DrawText(text, tl + Vec2f(area + 16, row_offset - (area / 8) + 1.5f), SColor(225, 255, 255, 255));
 			}
 		}
 
